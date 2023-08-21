@@ -1,0 +1,311 @@
+#                                                                Set-Up-Highly-Available-ON-Prem-Multi-Master-Cluster
+#                                                               -------------------------------------------------------
+
+# Prerequisites -:
+-----------------
+# STEP-1 -:
+-----------
+
+# For this purpose we are using 3 master and 2 nodes to create a multi-master k8s cluster using kubeadm installation tool. Below are the pre-requisite requirements for the installation.
+
+# 3 machines for master, ubuntu 20.04+, 2 CPU, 4 GB RAM, 10 GB Storage.        > (t2.medium)
+# 2 machines for Worker Nodes, ubuntu 20.04+, 1 CPU, 2 GB RAM, 10 GB Storage.  > (t2.micro)
+# 1 Machine for Load-Balancer, Ubuntu 20.04+, 1 CPU, 1 GB RAM, 10 Gb Storage.  > (t2.micro)
+# All the machines must be accessible on the network. For Cloud Users-single vpc for all machines.
+# Note -:
+# ------
+# But the best practice is create Your K8s-Cluster on pvt subnet and infront of your cluster set up a ALB in public subnet, then access your pvt cluster resources from ALB.
+
+# Setting up Load-Balancer -:
+-----------------------------
+# In order to set up loadbalancer, we can leverage any loadbalancer utility of our choice. if we wanna use cloud based TCP Loadbalancer we can feel free to use. 
+# For Practice purpose we are using HAPROXY as the primary loadbalancer.
+
+# So what are we loadbalancing -:
+--------------------------------
+# We have 3 master nodes. which means the user can connect to either 3-api-servers, The loadbalancer will be used to loadbalance between th e3 api-servers.
+
+# STEP-2 -:
+-----------
+# Log in to Your Load-balancer node 
+# Switched as a root                          > sudo -i
+# Update your repository and your system      > sudo apt-get udpate && sudo apt-get upgrade -y
+# Install HAPROXY                             > sudo apt-get install haproxy -y  
+# Edit HAPROXY Configuration                  > vi /etc/haproxy/haproxy.cfg
+# Inside this vi /etc/haproxy/haproxy.cfg file add the below line to create a front-end configuration for loadbalancer.
+-----------------------------------------------------------------------------------------------------------------------
+#  frontend fr-apiserver
+#      bind 0.0.0.0:6443
+#      node tcp
+#      option tcplog
+#      default_backend be-apiserver
+
+# NOTE -: ( Whenever request comes into this front-end server(Load-Balancer server) from any ip(0.0.0.0) on port 6443 the loadbalance will forward the traffic to that backend.
+# So now We are going to define the backend-Info
+
+# Add the below lines to create a back-end configuration for master1, master 2, and master 3 node at port 6443. NOTE-: 6443 it's a default port of kube-APi server.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# vi /etc/haproxy/haproxy.cfg(under default front-end values we define these back-end values).
+#  backend be-apiserver
+#        mode tcp
+#        option tcplog
+#        option tcp-check)
+#        balance roundrobin
+#        default-server inter 10s downinter 5s rise 2 fall 2 slowstart 60s maxconn 250 maxqueue 256 weight 100
+#        server master1 172.31.38.15:6443 check   (pvt ip's of your master).
+#        server master1 172.31.25.18:6443 check   (pvt ip's of your master).
+#        server master1 172.31.31.121:6443 check  (pvt ip's of your master).
+# (We mention our master server private ip's and k8s api-server Port bcs if we provide public ips they are  dynamic when we stop and start th einstance the ip will cange then we need to come here and change the ips manually). 
+# Save the file with front-end and back-end changes in vi etc/haproxy/haproxy (esc,shift:,wq!).
+
+# STEP-3 -:
+----------
+# Restart and Verify haproxy 
+----------------------------
+# systemctl restart haproxy. 
+# systemctl status haproxy.(It should Run) ( we can see the api-server status also).(as of now we aren't install kubernetes on our masters so that it shows master servers are down).
+
+# If you wanna check weathe that port is listening on that loadbalancer or not we can execute this command  -: nc -v localhost 6443. (status code success).
+# No we have  done a loadbalncer set-up. 
+
+# STEP-4 -:
+-----------
+#                                                           Maser node setup 
+#                                                           ----------------
+#  As of now we set up a load balancer, so now we can use that loadbalancer ip address while setting up this master node. let's try to configure k8s servers.
+#  Log in to all master and node server and install Docker, Kubeadm,Kubelet on master and worker nodes.
+#  Master 1, 
+#  Master 2,
+#  Master 3,
+#  Worker 1,
+#  Worker 2,
+
+# The below steps will be performed on all the below nodes.
+# Log in to all 5 machines as described above
+# Swith as root             > sudo -i
+# Update the repositories   > sudo apt-get update
+# Turn off SWAP               
+#      -: swapoff -a 
+#      -: sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+# Install Docker on all machines -:
+------------------------------------------
+#     -: apt install docker.io -y
+#     -: usermod -aG docker ubuntu (optional)
+#     -: systemctl restart docker
+#     -: systemctl enable docker.service
+
+# Install kubeadm and kubelet on all machines -:
+# -----------------------------------------------
+#     -: apt-get update && apt-get install -y apt-trasport-https curl ca-certificates gnupg-agent software-properties-common
+#     -: curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+#     -: cat <<EOF | sudo tee /etc/apt/sources.list.d/kubernetes.list
+#        deb https://apt.kubernetes.io/ kubernetes-xenial main
+#        EOF
+#     -: apt-get update
+#     -: apt-get install -y kubelet kubeadm
+#     -: systemctl daemon-reload
+#     -: systemctl start kubelet
+#     -: systemctl enable kubelet.service
+
+# Step -5 -:
+ -----------
+# Configure kubeadm to bootstrap the cluster -:
+-----------------------------------------------
+# we will start off by initializing only master node. for this demo, i'll use master1 to initialize our first control plane.
+#    -: log in to master1
+#    -: Switch to root account  > sudo -i
+# Execute the below command to initialize the cluster -:
+# ---------------------------------------------------------
+# kubeadm init --control-plane-endpoint "LOAD_BALANCER_DNS(or)IP:LOAD_BALANCER_PORT" --upload-certs
+# while execute this command replace the loadbalancer details as per your requirements.(Go to loadbalance server and copy pvt ip of that lb server and paste it here).
+
+# kubeadm init --control-plane-endpoint "Provide LB IP/DNS:6443" --upload-certs (execute on master1 it'll take time please be wait)
+
+# NOTE -: 
+# -------
+# Don't provide master/node server ips here just provide a loadbalancer serevr pvt ip  bcs we have a multiple-masters so api serever we are  exposing via Loadbalancer.
+
+# we will get a these below info after executing that kubeadm init command -:
+# --------------------------------------------------------------------------
+# These below commands execute in a normal user > (ex-:ubuntu).
+# mkdir -p $HOME/.kube
+# sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+# sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+# you should now deploy a pod network to the cluster.
+
+# you can now join any number of the control plane node running the following command an each as root:
+------------------------------------------------------------------------------------------------------
+#  kubeadm join 192.168.0.200:6443 --token 9vr73a.a8uxyaju799qwdjv \
+#  --discovery-token-ca-cert-hash sha256:7c2e69131a36ae2a042a339b33 \
+#  -- control-plane-certificate-key dad 5w4e6fw6f32f2
+# NOTE -: if you wanna join another master(control plane) copy this content and paste on that master2,3 serevers as a root).
+
+# For Worker nodes only -:
+--------------------------
+# You can join any num of worker nodes by running the following on each as root :
+#  kubeadm join 192.168.0.200:6443  --token gccm3r.65ed6565d \
+#       --discovery-token-ca-cert-hash sha256:5e45e44fvf15f1vf51f2f1
+
+# Open wroker nodes and execute these worker token there as a root.
+
+# STEP-6 -:
+ ---------
+# As of now we configure Master and workers, Now it's time to configure the Kubeconfig(.kube).
+# It's up to you if you were use the loadbalancer node to setup kubeconfig. kubeconfig can also be set up externally on seperate machine which has access to loadbalancer node.
+# For the purpose of this demo we will use loadbalancer node to host kubeconfig and kubectl.
+
+# Let's Start -:
+----------------
+# Step -1 -:
+------------
+#  -: Log in to loadbalancer node
+#  -: Switch to normal user         >  sudo su ubuntu
+#  -: Create a directory            >  .kube at $HOME of root > (mkdir -p $HOME/.kube).
+# Step -2 -:
+------------
+#  -: Scp configuration file from any one master node to load balancer node or manually cat the content from master1 create configfile in client machine.
+#  -: (Go to any master machine and take that /etc/kubernetes/admin.conf file and use the scp command to copy the file to your target system).
+#  -: For now login to master1 
+#       > swithched to root -: cat /etc/kubernetes/admin.conf
+#       > Copy that entaire config file from api-server to Lat line
+#       > Go to loadbalencer server 
+#       > swithched to ubuntu/user 
+#       > Create that file > vi ~/.kube/config > paste that content here.
+#  -: Provide appropriate ownership to the copied file 
+#        > sudo chown $(id -u):$(id -g) $HOME/.kube/config
+# step -3 -:
+-------------
+# -:  As of now we are not install kubectl Now i need to install kubectl.
+#     >  Install kubectl binary 
+#     >  sudo snap install kubectl --classic 
+
+# step -4 -:
+-------------
+# -: Verify the cluster -:
+#  ------------------------
+#  > kubectl cluster-info
+#  > kubectl get nodes.
+
+# Note -:
+---------
+# So you can see i install kubectl on loadbalncer server itself, so now request is going to masters. 
+# The load balancer is not my kubenetes machine.  Instead of install kubectl on loadbalancer serever, we can install kubectl in another server also using that command.
+
+# step -5 -:
+-----------
+# If i execute kubectl get nodes i couldn't see my servers in ready state. bcs we not deploy the k8s networking.
+
+# Install CNI and Complete installation -:
+-----------------------------------------
+# From the loadbalancer (where we have kubectl configured) node execute -
+# kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+# kubectl get pods -n -kube-system -o wide
+# kubectl get nodes.
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Install kubectl on new server -:(it can be a jenkins server/Client serever also).
+-----------------------------------------------------------------------------------
+# Launch new server t2.micro ( It can be a jenkins server also) where we can configure kubectl and we trigger a jenkins pipeline which can connect to the api-server via Loadbalancer and it can deploy the application.
+#  > Log in to this machine.
+
+# >> Install kubectl on Linux -: (Normal user)
+--------------------------------------------
+#  > curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+#  > ls (kubectl)
+#  > chmod +x ./kubectl
+#  > sudo mv ./kubectl /usr/local/bin/kubectl
+#  > kubectl version --client
+#  We can see the kubectl version but we don't have a kubeconfig file so that we can't execute any k8s cli commands.
+#  Bcs this kubectl requires that kubeconfig file but i don't have that kubeconfig file in this server.
+#  I want to copy that kubeconfig file from other server where i have a kubeconfg file. In this example we have a kubeconfg file in my master1 server.
+
+#  How can i get that kubeconfig file from my loadbalancer server to my client/jenkins server -:
+------------------------------------------------------------------------------------------------
+# > First create Directroy            -:   mkdir ~/.kube
+# > Go to Master1 server 
+#    > Open the file                  -: cat /etc/kubernetes/admin.conf  (Copy all the content from api-server to last line).
+# > Come back to new server  
+#    > open this file                 -: vi ~/.kube/config (Paste that content into here)
+#    > Check the file                 -: cat ~/.kube/config ( we can see the load balancer server ip under server info).
+# > Now you can check the nodes info -:
+#    > kubectl get nodes
+# > So request is comes to this loadbalancer machine and in loadbalancer server we have a haproxy.
+# > In this haproxy we define a haproxy rules(inside /etc/haproxy/haproxy.conf). based on that rules it'll route the traffic to the available servers.
+# > So if one master server will goes down it'll route the traffic to another master server.
+
+# Ex i deploy some sample applicaion on our CLient(new-server) -:(as a normal user)
+-----------------------------------------------------------------------------------
+# vi Deployment.yaml
+# apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-master-deployment
+  labels:
+     app: myjavaapp
+spec:
+   replicas: 2
+   selector:
+      matchLabels:
+        app: multi-master
+   template:
+     metadata:
+	    name: multi-master
+        labels:
+          app: multi-master
+     spec:
+      containers:
+      - name: multi-master-container
+        image:***********/**********:1
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-master
+spec:
+   selector:
+       app: multi-master
+  ports:
+  - port: 80
+    targetPort:8080
+ type: NodePort
+  
+# > Save the file > esc,Shift:,wq!
+
+# Apply This file -:(on Client serve as a user) 
+-----------------------------------------------
+# kubectl apply -f filename.yaml
+# kubectl get pods -o wide    > Check the pods > (Now we can see pods are getting created on both worker nodes, pods are up & running).
+# kubectl get svc             > Check the service > (We can see the NodePort service which we created).(This service we can access using node-port and Node-Ip)
+# What is the node ip here ?  > Either your any master ip or any of your worker node ip. So let we access the service using any machine ip weather it's a master1, master2, master 3, node1 or node 2 ip.
+# Bcs there is a service discovery with in your k8s cluster it can route the traffic wherver it's running.
+# Copy Public ip of any Master (or) Node bcs we are accessing from outside, Paste that public ip with node port on your browser.(Public iip:Nodeport)(13.25.105.256:32528)
+# Now we can see our web page.
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Now intentionally remove one master for checking the HA with multi-master loadbalancer.
+
+# kubectl get nodes  > We get all availble node information.
+# Go to aws ec2 dashboad and stop one master server. so i'm stop my master server but still my k8s cluster is accessible and it's highly available.
+# Bcs we have another two control-planes(another master server). So we hsve another two more api-servers (or) Two more Shedulers (or) Two more Control-Managers.
+# So when i access kubectl request is going to Load-balancer then from Load-Balancer to the one of the healthy node.
+# Go to your client server and check the cluster accessibility by executing the kubectl commands.(kubectl get pods -o wide, kubectl get nodes).
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# So Our Client server send a request to the loadbalancer server and our loadbalancer serever configured with our master servers(Reverse-Proxy).
+# So Load-Balancer will send a request to any one of the master server, If my master 1 is down request goes to master 2.
+
+# Note -1 -:
+------------
+# If we are using On-prem infra (or) baremetal Server we need to set up Multi-Master-Cluster using this Approach.
+
+# Note -2 -:
+-------- 
+# Instead of this manual set up we can also use Manages K8s services like EKS, AKS, GKE & etc. If we use managed k8s services we no need to worry about the Control-plane(MASTER).
+# Bcs The Control-plane(MASTER) is completely managed by a cloud provider. They make sure our k8s cluster is Highly-Available and fault-tolirated and scalable.
+
+
+
+
